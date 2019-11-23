@@ -150,8 +150,8 @@ def inline_script(line, o, source_type, args):
         raise KeyError("Inline script must be either js- or css-file")
     if s > 0:
         e = line.find('">', s)
-        url = line[s+offset:e]
-        js_file = open(os.path.join(args.data, 'igv.min.js'), 'r')  # Very reluctant had to hardcode
+        # url = line[s+offset:e]
+        js_file = open(args.igv_js, 'r')
         content = js_file.read()
         js_file.close()
         o.write(content)
@@ -176,7 +176,7 @@ def main():
     parser.add_argument("--sample-columns", nargs="+", help="list of VCF sample/format field names to include in variant table")
     parser.add_argument("--flanking", help="genomic region to include either side of variant", default=1000)
     parser.add_argument('--standalone', help='Print more data', action='store_true')
-    parser.add_argument('--data', help='Path of igv.min.js file')
+    parser.add_argument('--igv_js', help='Path of igv.min.js file')
     args = parser.parse_args()
     create_report(args)
 
