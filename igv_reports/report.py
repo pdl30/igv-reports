@@ -138,6 +138,7 @@ def create_report(args):
 
 def inline_script(line, o, source_type):
     #<script type="text/javascript" src="https://igv.org/web/test/dist/igv.min.js"></script>
+    script_path = os.path.dirname(sys.argv[0])
     if source_type == "js":
         s = line.find('src="')
         offset = 5
@@ -151,9 +152,9 @@ def inline_script(line, o, source_type):
     if s > 0:
         e = line.find('">', s)
         url = line[s+offset:e]
-        response = urlopen(url)
-        content = response.read().decode('utf-8')
-        response.close()
+        js_file = open(os.path.join(script_path, 'templates/data/igv.min.js', 'r'))
+        content = js_file.readlines()
+        js_file.close()
         o.write(content)
         if source_type == "js":
             o.write('</script>\n')
