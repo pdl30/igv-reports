@@ -120,10 +120,10 @@ def create_report(args):
 
                 if standalone:
                     if line.strip().startswith("<script") and ".js\"" in line:
-                        inline_script(line, o, "js")
+                        inline_script(line, o, "js", args)
                         continue
                     elif line.strip().startswith("<link") and line.strip().endswith("css\">"):
-                        inline_script(line, o, "css")
+                        inline_script(line, o, "css", args)
                         continue
                 j = line.find('"@TABLE_JSON@"')
                 if j >= 0:
@@ -136,9 +136,8 @@ def create_report(args):
                 o.write(line)
 
 
-def inline_script(line, o, source_type):
+def inline_script(line, o, source_type, args):
     #<script type="text/javascript" src="https://igv.org/web/test/dist/igv.min.js"></script>
-    script_path = os.path.dirname(sys.argv[0])
     if source_type == "js":
         s = line.find('src="')
         offset = 5
@@ -152,8 +151,8 @@ def inline_script(line, o, source_type):
     if s > 0:
         e = line.find('">', s)
         url = line[s+offset:e]
-        js_file = open(os.path.join(script_path, 'templates/data/igv.min.js', 'r'))
-        content = js_file.readlines()
+        js_file = open(os.path.join(args.data, 'igv.min.js'), 'r')  # Very reluctant had to hardcode
+        content = js_file.read()
         js_file.close()
         o.write(content)
         if source_type == "js":
@@ -177,6 +176,7 @@ def main():
     parser.add_argument("--sample-columns", nargs="+", help="list of VCF sample/format field names to include in variant table")
     parser.add_argument("--flanking", help="genomic region to include either side of variant", default=1000)
     parser.add_argument('--standalone', help='Print more data', action='store_true')
+    parser.add_argument('--data', help='Path of igv.min.js file')
     args = parser.parse_args()
     create_report(args)
 
