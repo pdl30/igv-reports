@@ -2,19 +2,28 @@ import io
 import json
 import pysam
 from .feature import Feature
+import requests
+
 
 class VariantTable:
 
     # Always remember the *self* argument
-    def __init__(self, vcfFile, info_columns = None, info_columns_prefixes = None, sample_columns = None):
+    def __init__(self, vcfFile, panel_file=True, info_columns = None, info_columns_prefixes = None, sample_columns = None,
+                 lynch_sample=False):
 
         vcf = pysam.VariantFile(vcfFile)
-
+        self.panel_file = panel_file
         self.info_fields =  info_columns or []
         self.info_field_prefixes = info_columns_prefixes or []
         self.sample_fields = sample_columns or []
         self.variants = []
         self.features = []   #Bed-like features
+        self.lynch_sample = lynch_sample
+        self.genes = self.load_genes()
+        for record in vcf.header.records:
+            if 'ALAMUT_ANN' in str(record):
+                alamut_ann = str(record).rstrip()
+                self.alamut_ann = alamut_ann.split('Format: ')[1].split('|')
 
         for unique_id, var in enumerate(vcf.fetch()):
             self.variants.append((var, unique_id))
@@ -24,18 +33,28 @@ class VariantTable:
             self.features.append((Feature(chr, start, end, ''), unique_id))
 
     def to_JSON(self):
-
-
+        # In order to create correct HGVS, I need to know the correct gene,
+        # For correct gene, you should have this in the panel file
+        # Longest transcript should be in VCF
+        # Selected transcript will need an API
         json_array = [];
-
+        unique_id = None
         for variant, unique_id in self.variants:
+            gene_name = self.get_gene_name(variant)
+            gene_transcripts = self.goshg2p_connection(gene_name)
+            if gene_transcripts:
+                selected_transcript = gene_transcripts[0]['transcript']
+            else:
+                selected_transcript = self.get_longest_transcript(variant)
+            hgvs = self.get_hgvs(variant, selected_transcript)
             obj = {
                 'unique_id': unique_id,
                 'CHROM': variant.chrom,
                 'POSITION': variant.pos,
                 'REF': variant.ref,
                 'ALT': ','.join(variant.alts),
-                'ID': ''
+                'ID': hgvs,
+                'GENE': gene_name
             }
 
             if variant.id is not None:
@@ -80,12 +99,92 @@ class VariantTable:
 
             json_array.append(obj)
 
+        if self.lynch_sample:
+            if not unique_id:
+                unique_id = 0
+            unique_id += 1
+            json_array.append({'uniquq_id': unique_id, 'CHROM': 'chr2', 'POSITION': 47641560,
+                               'REF': '', 'ALT': '', 'ID': 'LYNCH FOR REVIEW'}) # TODO - check if this works!
         if not any(obj['ID'] for obj in json_array):
             # Remove ID column if none of the records actually had an ID.
             for obj in json_array:
                 del obj['ID']
         return json.dumps(json_array)
 
+    def load_genes(self):
+        genes = []
+        with open(self.panel_file) as f:
+            for line in f:
+                word = line.rstrip().split('\t')
+                if word[3] not in genes:
+                    genes.append(word[3])
+        return genes
+
+    def get_gene_name(self, variant):
+        for ann in variant.info['ALAMUT_ANN']:
+            zipped = zip(self.alamut_ann, ann.split('|'))
+            format_dict = {f[0]: f[1] for f in zipped}
+            if 'gene' in format_dict:
+                if format_dict['gene'] in self.genes:
+                    return format_dict['gene']
+        return None  # If no gene, don't bother trying to annotate HGVS
+
+    def get_longest_transcript(self, variant):
+        """
+        Loops over the annotations and a dict with the longest transcript info
+        :param variant:
+        :return:
+        """
+        longest_transcript = {'transcript': '', 'length': 0}
+        for ann in variant.info['ALAMUT_ANN']:
+            zipped = zip(self.alamut_ann, ann.split('|'))
+            format_dict = {f[0]: f[1] for f in zipped}
+            if 'transLen' in format_dict:
+                if int(format_dict['transLen']) > int(longest_transcript['length']):
+                    longest_transcript['transcript'] = format_dict['transcript']
+                    longest_transcript['length'] = int(format_dict['transLen'])
+        if longest_transcript:
+            return longest_transcript['transcript']
+        else:
+            return
+
+    def get_hgvs(self, variant, transcript):
+        for ann in variant.info['ALAMUT_ANN']:
+            zipped = zip(self.alamut_ann, ann.split('|'))
+            format_dict = {f[0]: f[1] for f in zipped}
+            if 'transcript' in format_dict:
+                if transcript in format_dict['transcript']:
+                    return format_dict['cNomen']
+
+    @staticmethod
+    def goshg2p_connection(gene_name):
+        page = 1
+        last_page = False
+        all_results = []
+        while not last_page:
+            json_poll_success = False
+            while not json_poll_success:
+                MAX_RETRIES = 20
+                session = requests.Session()
+                adapter = requests.adapters.HTTPAdapter(max_retries=MAX_RETRIES)
+                session.mount("http://", adapter)
+                response = session.get(
+                    url=f"http://10.101.45.28:8014/goshg2p/api/transcripts/{gene_name}?page={page}")
+                try:
+                    response_json = response.json()
+                    response_status = response.status_code
+                    if response_status != 200:
+                        raise ValueError(f'status code = {response_status}')
+                    json_poll_success = True
+                    all_results.extend(response_json['results'])
+                except (json.JSONDecodeError, ValueError) as e:
+                    print(e)
+                    raise
+            if response_json["next"]:
+                page += 1
+            else:
+                last_page = True
+        return all_results
 
 def render_value(v):
     """Render given value to string."""
