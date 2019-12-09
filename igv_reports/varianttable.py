@@ -116,7 +116,7 @@ class VariantTable:
                     if (variant.chrom == 'chr2' and variant.pos > 47641560) or int(variant.chrom.strip('chr')) >= 3:
                         # You should now add the lynch_variant
                         json_array.append({'unique_id': variant_id, 'CHROM': 'chr2', 'POSITION': 47641560,
-                                           'REF': 'A', 'ALT': 'T', 'ID': 'LYNCH FOR REVIEW - variant not called',
+                                           'REF': 'A', 'ALT': 'T', 'ID': 'LYNCH VARIANT FOR REVIEW",
                                            'GENE': 'MSH2'})
                         variant_id += 1
                         obj['unique_id'] = variant_id
