@@ -8,7 +8,7 @@ import requests
 class VariantTable:
 
     # Always remember the *self* argument
-    def __init__(self, vcfFile, panel_file=True, info_columns = None, info_columns_prefixes = None, sample_columns = None,
+    def __init__(self, vcfFile,  goshg2p_url, goshg2p_port, panel_file=True, info_columns = None, info_columns_prefixes = None, sample_columns = None,
                  lynch_sample=False):
 
         vcf = pysam.VariantFile(vcfFile)
@@ -19,6 +19,8 @@ class VariantTable:
         self.variants = []
         self.features = []   #Bed-like features
         self.genes = self.load_genes()
+        self.goshg2p_url = goshg2p_url
+        self.goshg2p_port = goshg2p_port
         self.lynch_sample = lynch_sample
         for record in vcf.header.records:
             if 'ALAMUT_ANN' in str(record):
@@ -51,7 +53,7 @@ class VariantTable:
         variant_id = 0
         for variant, unique_id in self.variants:
             gene_name = self.get_gene_name(variant)
-            gene_transcripts = self.goshg2p_connection(gene_name)
+            gene_transcripts = self.goshg2p_transcript_api(gene_name)
 
             if gene_transcripts:
                 selected_transcript = gene_transcripts[0]['transcript']
@@ -130,6 +132,7 @@ class VariantTable:
         return json.dumps(json_array)
 
     def load_genes(self):
+        # Loads the gene names from the panel file
         genes = []
         with open(self.panel_file) as f:
             for line in f:
@@ -139,6 +142,7 @@ class VariantTable:
         return genes
 
     def get_gene_name(self, variant):
+        # Picks the gene name for the variant which appears in the panel
         for ann in variant.info['ALAMUT_ANN']:
             zipped = zip(self.alamut_ann, ann.split('|'))
             format_dict = {f[0]: f[1] for f in zipped}
@@ -149,7 +153,7 @@ class VariantTable:
 
     def get_longest_transcript(self, variant):
         """
-        Loops over the annotations and a dict with the longest transcript info
+        Loops over the annotations and creates dict with the info for the longest transcript
         :param variant:
         :return:
         """
@@ -163,19 +167,20 @@ class VariantTable:
                     longest_transcript['length'] = int(format_dict['transLen'])
         if longest_transcript:
             return longest_transcript['transcript']
-        else:
-            return
+        return None
 
     def get_hgvs(self, variant, transcript):
+        # For the supplied transcript, get the HGVSc info from the alamut annotation
         for ann in variant.info['ALAMUT_ANN']:
             zipped = zip(self.alamut_ann, ann.split('|'))
             format_dict = {f[0]: f[1] for f in zipped}
             if 'transcript' in format_dict:
                 if transcript in format_dict['transcript']:
                     return format_dict['cNomen']
+        return None
 
-    @staticmethod
-    def goshg2p_connection(gene_name):
+    def goshg2p_transcript_api(self, gene_name):
+        # Connects to GOSHG2P transcript API to get the priority transcript for a specified gene name
         page = 1
         last_page = False
         all_results = []
@@ -187,7 +192,7 @@ class VariantTable:
                 adapter = requests.adapters.HTTPAdapter(max_retries=MAX_RETRIES)
                 session.mount("http://", adapter)
                 response = session.get(
-                    url=f"http://10.101.45.28:8014/goshg2p/api/transcripts/{gene_name}?page={page}")
+                    url=f"http://{self.goshg2p_url}:{self.goshg2p_port}/goshg2p/api/transcripts/{gene_name}?page={page}")
                 try:
                     response_json = response.json()
                     response_status = response.status_code
