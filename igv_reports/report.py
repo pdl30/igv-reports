@@ -14,7 +14,8 @@ def create_report(args):
     variants_file = args.sites
 
     if variants_file.endswith(".vcf") or variants_file.endswith (".vcf.gz"):
-        table = VariantTable(variants_file, args.panel_file, args.info_columns, args.info_columns_prefixes, args.sample_columns,
+        table = VariantTable(variants_file, args.goshg2p_url, args.goshg2p_port, args.panel_file,
+                             args.info_columns, args.info_columns_prefixes, args.sample_columns,
                              args.lynch_sample)
 
     elif variants_file.endswith(".bed") or variants_file.endswith(".bed.gz"):
@@ -180,6 +181,8 @@ def main():
     parser.add_argument('--igv_js', help='Path of igv.min.js file')
     parser.add_argument('--lynch_sample', help='Does the sample have the LYNCH panel applied', action='store_true')
     parser.add_argument('--panel_file', help='Bed file for panel; file should have gene name on column 4')
+    parser.add_argument('--goshg2p_url', help='GOSHG2P URL e.g. 10.101.XX.XX', )
+    parser.add_argument('--goshg2p_port', help='GOSHG2P PORT e.g. 3306')
     args = parser.parse_args()
     create_report(args)
 
