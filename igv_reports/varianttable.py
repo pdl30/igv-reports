@@ -46,10 +46,6 @@ class VariantTable:
             variant_id += 1
 
     def to_JSON(self):
-        # In order to create correct HGVS, I need to know the correct gene,
-        # For correct gene, you should have this in the panel file
-        # Longest transcript should be in VCF
-        # Selected transcript will need an API
         json_array = [];
         lynch_variant_added = False
         variant_id = 0
@@ -116,7 +112,7 @@ class VariantTable:
                     if (variant.chrom == 'chr2' and variant.pos > 47641560) or int(variant.chrom.strip('chr')) >= 3:
                         # You should now add the lynch_variant
                         json_array.append({'unique_id': variant_id, 'CHROM': 'chr2', 'POSITION': 47641560,
-                                           'REF': 'A', 'ALT': 'T', 'ID': 'LYNCH VARIANT FOR REVIEW",
+                                           'REF': 'A', 'ALT': 'T', 'ID': 'LYNCH VARIANT FOR REVIEW',
                                            'GENE': 'MSH2'})
                         variant_id += 1
                         obj['unique_id'] = variant_id
