@@ -18,19 +18,32 @@ class VariantTable:
         self.sample_fields = sample_columns or []
         self.variants = []
         self.features = []   #Bed-like features
-        self.lynch_sample = lynch_sample
         self.genes = self.load_genes()
+        self.lynch_sample = lynch_sample
         for record in vcf.header.records:
             if 'ALAMUT_ANN' in str(record):
                 alamut_ann = str(record).rstrip()
                 self.alamut_ann = alamut_ann.split('Format: ')[1].split('|')
 
+        lynch_variant_added = False
+        variant_id = 0
         for unique_id, var in enumerate(vcf.fetch()):
-            self.variants.append((var, unique_id))
+            try:
+                if lynch_sample and not lynch_variant_added and int(var.chrom.strip('chr')) > 1:
+                    if (var.chrom == 'chr2' and var.pos > 47641560) or int(var.chrom.strip('chr')) >= 3:
+                        # You should now add the lynch_variant
+                        self.features.append((Feature('chr2', 47641559, 47641561, ''), variant_id))
+                        variant_id += 1
+                        lynch_variant_added = True
+            except ValueError as e:
+                pass
+
+            self.variants.append((var, variant_id))
             chr = var.chrom
             start = var.pos - 1
             end = start + 1       #TODO -- handle structure variants and deletions > 1 base
-            self.features.append((Feature(chr, start, end, ''), unique_id))
+            self.features.append((Feature(chr, start, end, ''), variant_id))
+            variant_id += 1
 
     def to_JSON(self):
         # In order to create correct HGVS, I need to know the correct gene,
@@ -38,17 +51,19 @@ class VariantTable:
         # Longest transcript should be in VCF
         # Selected transcript will need an API
         json_array = [];
-        unique_id = None
+        lynch_variant_added = False
+        variant_id = 0
         for variant, unique_id in self.variants:
             gene_name = self.get_gene_name(variant)
             gene_transcripts = self.goshg2p_connection(gene_name)
+
             if gene_transcripts:
                 selected_transcript = gene_transcripts[0]['transcript']
             else:
                 selected_transcript = self.get_longest_transcript(variant)
             hgvs = self.get_hgvs(variant, selected_transcript)
             obj = {
-                'unique_id': unique_id,
+                'unique_id': variant_id,
                 'CHROM': variant.chrom,
                 'POSITION': variant.pos,
                 'REF': variant.ref,
@@ -96,19 +111,26 @@ class VariantTable:
                         pass
 
                     obj[f'{sample}:{h}'] = render_values(v)
-
+            try:
+                if self.lynch_sample and not lynch_variant_added and int(variant.chrom.strip('chr')) > 1:
+                    if (variant.chrom == 'chr2' and variant.pos > 47641560) or int(variant.chrom.strip('chr')) >= 3:
+                        # You should now add the lynch_variant
+                        json_array.append({'unique_id': variant_id, 'CHROM': 'chr2', 'POSITION': 47641560,
+                                           'REF': 'A', 'ALT': 'T', 'ID': 'LYNCH FOR REVIEW - variant not called',
+                                           'GENE': 'MSH2'})
+                        variant_id += 1
+                        obj['unique_id'] = variant_id
+                        lynch_variant_added = True
+            except ValueError as e:
+                pass
             json_array.append(obj)
+            variant_id += 1
 
-        if self.lynch_sample:
-            if not unique_id:
-                unique_id = 0
-            unique_id += 1
-            json_array.append({'uniquq_id': unique_id, 'CHROM': 'chr2', 'POSITION': 47641560,
-                               'REF': '', 'ALT': '', 'ID': 'LYNCH FOR REVIEW'}) # TODO - check if this works!
         if not any(obj['ID'] for obj in json_array):
             # Remove ID column if none of the records actually had an ID.
             for obj in json_array:
                 del obj['ID']
+
         return json.dumps(json_array)
 
     def load_genes(self):
