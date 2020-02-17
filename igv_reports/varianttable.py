@@ -2,40 +2,72 @@ import io
 import json
 import pysam
 from .feature import Feature
+import requests
+
 
 class VariantTable:
 
     # Always remember the *self* argument
-    def __init__(self, vcfFile, info_columns = None, info_columns_prefixes = None, sample_columns = None):
+    def __init__(self, vcfFile,  goshg2p_url, goshg2p_port, panel_file=True, info_columns = None, info_columns_prefixes = None, sample_columns = None,
+                 lynch_sample=False):
 
         vcf = pysam.VariantFile(vcfFile)
-
+        self.panel_file = panel_file
         self.info_fields =  info_columns or []
         self.info_field_prefixes = info_columns_prefixes or []
         self.sample_fields = sample_columns or []
         self.variants = []
         self.features = []   #Bed-like features
+        self.genes = self.load_genes()
+        self.goshg2p_url = goshg2p_url
+        self.goshg2p_port = goshg2p_port
+        self.lynch_sample = lynch_sample
+        for record in vcf.header.records:
+            if 'ALAMUT_ANN' in str(record):
+                alamut_ann = str(record).rstrip()
+                self.alamut_ann = alamut_ann.split('Format: ')[1].split('|')
 
+        lynch_variant_added = False
+        variant_id = 0
         for unique_id, var in enumerate(vcf.fetch()):
-            self.variants.append((var, unique_id))
+            try:
+                if lynch_sample and not lynch_variant_added and int(var.chrom.strip('chr')) > 1:
+                    if (var.chrom == 'chr2' and var.pos > 47641560) or int(var.chrom.strip('chr')) >= 3:
+                        # You should now add the lynch_variant
+                        self.features.append((Feature('chr2', 47641559, 47641561, ''), variant_id))
+                        variant_id += 1
+                        lynch_variant_added = True
+            except ValueError as e:
+                pass
+
+            self.variants.append((var, variant_id))
             chr = var.chrom
             start = var.pos - 1
             end = start + 1       #TODO -- handle structure variants and deletions > 1 base
-            self.features.append((Feature(chr, start, end, ''), unique_id))
+            self.features.append((Feature(chr, start, end, ''), variant_id))
+            variant_id += 1
 
     def to_JSON(self):
-
-
         json_array = [];
-
+        lynch_variant_added = False
+        variant_id = 0
         for variant, unique_id in self.variants:
+            gene_name = self.get_gene_name(variant)
+            gene_transcripts = self.goshg2p_transcript_api(gene_name)
+
+            if gene_transcripts:
+                selected_transcript = gene_transcripts[0]['transcript']
+            else:
+                selected_transcript = self.get_longest_transcript(variant)
+            hgvs = self.get_hgvs(variant, selected_transcript)
             obj = {
-                'unique_id': unique_id,
+                'unique_id': variant_id,
                 'CHROM': variant.chrom,
                 'POSITION': variant.pos,
                 'REF': variant.ref,
                 'ALT': ','.join(variant.alts),
-                'ID': ''
+                'ID': hgvs,
+                'GENE': gene_name
             }
 
             if variant.id is not None:
@@ -77,15 +109,105 @@ class VariantTable:
                         pass
 
                     obj[f'{sample}:{h}'] = render_values(v)
-
+            try:
+                if self.lynch_sample and not lynch_variant_added and int(variant.chrom.strip('chr')) > 1:
+                    if (variant.chrom == 'chr2' and variant.pos > 47641560) or int(variant.chrom.strip('chr')) >= 3:
+                        # You should now add the lynch_variant
+                        json_array.append({'unique_id': variant_id, 'CHROM': 'chr2', 'POSITION': 47641560,
+                                           'REF': 'A', 'ALT': 'T', 'ID': 'LYNCH VARIANT FOR REVIEW',
+                                           'GENE': 'MSH2'})
+                        variant_id += 1
+                        obj['unique_id'] = variant_id
+                        lynch_variant_added = True
+            except ValueError as e:
+                pass
             json_array.append(obj)
+            variant_id += 1
 
         if not any(obj['ID'] for obj in json_array):
             # Remove ID column if none of the records actually had an ID.
             for obj in json_array:
                 del obj['ID']
+
         return json.dumps(json_array)
 
+    def load_genes(self):
+        # Loads the gene names from the panel file
+        genes = []
+        with open(self.panel_file) as f:
+            for line in f:
+                word = line.rstrip().split('\t')
+                if word[3] not in genes:
+                    genes.append(word[3])
+        return genes
+
+    def get_gene_name(self, variant):
+        # Picks the gene name for the variant which appears in the panel
+        for ann in variant.info['ALAMUT_ANN']:
+            zipped = zip(self.alamut_ann, ann.split('|'))
+            format_dict = {f[0]: f[1] for f in zipped}
+            if 'gene' in format_dict:
+                if format_dict['gene'] in self.genes:
+                    return format_dict['gene']
+        return None  # If no gene, don't bother trying to annotate HGVS
+
+    def get_longest_transcript(self, variant):
+        """
+        Loops over the annotations and creates dict with the info for the longest transcript
+        :param variant:
+        :return:
+        """
+        longest_transcript = {'transcript': '', 'length': 0}
+        for ann in variant.info['ALAMUT_ANN']:
+            zipped = zip(self.alamut_ann, ann.split('|'))
+            format_dict = {f[0]: f[1] for f in zipped}
+            if 'transLen' in format_dict:
+                if int(format_dict['transLen']) > int(longest_transcript['length']):
+                    longest_transcript['transcript'] = format_dict['transcript']
+                    longest_transcript['length'] = int(format_dict['transLen'])
+        if longest_transcript:
+            return longest_transcript['transcript']
+        return None
+
+    def get_hgvs(self, variant, transcript):
+        # For the supplied transcript, get the HGVSc info from the alamut annotation
+        for ann in variant.info['ALAMUT_ANN']:
+            zipped = zip(self.alamut_ann, ann.split('|'))
+            format_dict = {f[0]: f[1] for f in zipped}
+            if 'transcript' in format_dict:
+                if transcript in format_dict['transcript']:
+                    return format_dict['cNomen']
+        return None
+
+    def goshg2p_transcript_api(self, gene_name):
+        # Connects to GOSHG2P transcript API to get the priority transcript for a specified gene name
+        page = 1
+        last_page = False
+        all_results = []
+        while not last_page:
+            json_poll_success = False
+            while not json_poll_success:
+                MAX_RETRIES = 20
+                session = requests.Session()
+                adapter = requests.adapters.HTTPAdapter(max_retries=MAX_RETRIES)
+                session.mount("http://", adapter)
+                response = session.get(
+                    url=f"http://{self.goshg2p_url}:{self.goshg2p_port}/goshg2p/api/transcripts/{gene_name}?page={page}")
+                try:
+                    response_json = response.json()
+                    response_status = response.status_code
+                    if response_status != 200:
+                        raise ValueError(f'status code = {response_status}')
+                    json_poll_success = True
+                    all_results.extend(response_json['results'])
+                except (json.JSONDecodeError, ValueError) as e:
+                    print(e)
+                    raise
+            if response_json["next"]:
+                page += 1
+            else:
+                last_page = True
+        return all_results
 
 def render_value(v):
     """Render given value to string."""
