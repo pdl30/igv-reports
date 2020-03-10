@@ -8,7 +8,7 @@ import requests
 class VariantTable:
 
     # Always remember the *self* argument
-    def __init__(self, vcfFile,  goshg2p_url, goshg2p_port, panel_file=True, info_columns = None, info_columns_prefixes = None, sample_columns = None,
+    def __init__(self, vcfFile,  goshg2p_url, goshg2p_port, panel_file=None, info_columns = None, info_columns_prefixes = None, sample_columns = None,
                  lynch_sample=False):
 
         vcf = pysam.VariantFile(vcfFile)
@@ -18,7 +18,8 @@ class VariantTable:
         self.sample_fields = sample_columns or []
         self.variants = []
         self.features = []   #Bed-like features
-        self.genes = self.load_genes()
+        if self.panel_file:
+            self.genes = self.load_genes()
         self.goshg2p_url = goshg2p_url
         self.goshg2p_port = goshg2p_port
         self.lynch_sample = lynch_sample
@@ -51,6 +52,22 @@ class VariantTable:
         json_array = [];
         lynch_variant_added = False
         variant_id = 0
+        # if not panel file given, just write array without gene name given
+        if not self.panel_file:
+            for variant, unique_id in self.variants:
+                obj = {
+                    'unique_id': variant_id,
+                    'CHROM': variant.chrom,
+                    'POSITION': variant.pos,
+                    'REF': variant.ref,
+                    'ALT': ','.join(variant.alts),
+                    'ID': 'not set',
+                    'GENE': 'not set'
+                }
+                json_array.append(obj)
+                variant_id += 1
+            return json.dumps(json_array)
+
         for variant, unique_id in self.variants:
             gene_name = self.get_gene_name(variant)
             gene_transcripts = self.goshg2p_transcript_api(gene_name)
